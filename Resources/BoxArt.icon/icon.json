@@ -1,0 +1,82 @@
+{
+  "fill": {
+    "solid": "extended-srgb:0.045,0.085,0.18,1"
+  },
+  "groups": [
+    {
+      "name": "Cover art",
+      "layers": [
+        {
+          "name": "Cover art",
+          "image-name": "Cover art.svg"
+        },
+        {
+          "name": "Game mark",
+          "image-name": "Game mark.svg"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.05
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.0
+      }
+    },
+    {
+      "name": "Ivory case",
+      "layers": [
+        {
+          "name": "Ivory case",
+          "image-name": "Ivory case.svg"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.04
+      }
+    },
+    {
+      "name": "Cyan case",
+      "layers": [
+        {
+          "name": "Cyan case",
+          "image-name": "Cyan case.svg"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.04
+      }
+    },
+    {
+      "name": "Coral case",
+      "layers": [
+        {
+          "name": "Coral case",
+          "image-name": "Coral case.svg"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.04
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
