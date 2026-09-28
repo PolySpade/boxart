@@ -39,6 +39,9 @@ import BoxArtCore
     @Published var systemFilter: GameSystem?
     @Published var profile: Profile = .anbernic
     @Published var size = 512
+    @Published var normalizeFilenames = UserDefaults.standard.bool(forKey: "normalizeFilenames") {
+        didSet { UserDefaults.standard.set(normalizeFilenames, forKey: "normalizeFilenames") }
+    }
     @Published var jpeg = false
     @Published var identities: [String: PlaylistIdentity] = [:]
     @Published var destination: URL?
@@ -51,9 +54,19 @@ import BoxArtCore
     var settings: ExportSettings {
         var s = ExportSettings(); s.profile = profile; s.maxSize = size; s.jpeg = jpeg; s.destination = destination ?? (profile == .retroarch ? ExportSettings.suggestedRetroArchDirectory(for: URL(fileURLWithPath: folder)) : nil); s.identities = identities; return s
     }
-    var visible: [Game] {
-        games.filter { (systemFilter == nil || $0.system == systemFilter) && (query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || ($0.code?.localizedCaseInsensitiveContains(query) ?? false)) && (filter == "All games" || (filter == "Ready to save" ? $0.status == "Ready" : filter == "Saved" ? $0.savedURL != nil : $0.savedURL == nil && $0.status != "Ready")) }
+    var matchingGames: [Game] {
+        games.filter { (systemFilter == nil || $0.system == systemFilter) && (query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || ($0.code?.localizedCaseInsensitiveContains(query) ?? false)) }
     }
+    func matchesArtworkFilter(_ game: Game, filter: String) -> Bool {
+        switch filter {
+        case "Ready to save": return game.status == "Ready"
+        case "Saved": return game.savedURL != nil
+        case "Needs artwork": return game.savedURL == nil && game.status != "Ready"
+        default: return true
+        }
+    }
+    var visible: [Game] { matchingGames.filter { matchesArtworkFilter($0, filter: filter) } }
+    func filterCount(_ filter: String) -> Int { matchingGames.filter { matchesArtworkFilter($0, filter: filter) }.count }
     var ready: Int { games.filter { $0.status == "Ready" }.count }
     var saved: Int { games.filter { $0.savedURL != nil }.count }
     var selected: Game? { games.first { $0.id == selection } }
@@ -91,12 +104,35 @@ import BoxArtCore
         let indices = games.indices.filter { games[$0].savedURL == nil && games[$0].status != "Ready" && (!selectedOnly || games[$0].id == selection) && (ids == nil || ids!.contains(games[$0].id)) }
         guard !indices.isEmpty else { return }
         busy = true; progress = 0
+        let normalize = normalizeFilenames
+        var batchIDs = ids
         job = Task {
             for (offset, index) in indices.enumerated() {
                 if Task.isCancelled { break }
                 message = "Finding artwork · \(games[index].title)"; games[index].status = "Searching"
                 do {
-                    if let (data, source) = try await service.artwork(for: games[index]) {
+                    var lookup = games[index]
+                    var canonical: String?
+                    if normalize {
+                        guard identities[lookup.id] == nil, profile != .retroarch else { throw ArtError.message("Disable filename normalization for RetroArch or imported playlists; their paths must remain unchanged.") }
+                        canonical = try await service.normalizedName(for: lookup)
+                        lookup.lookupName = canonical ?? lookup.lookupName
+                    }
+                    if let (data, source) = try await service.artwork(for: lookup) {
+                        if let canonical {
+                            let oldID = games[index].id
+                            if (try? Library.existing(for: games[index].url, settings: settings)) != nil { throw ArtError.message("Renaming skipped because this ROM already has artwork.") }
+                            let target = games[index].url.deletingLastPathComponent().appendingPathComponent(canonical).appendingPathExtension(games[index].url.pathExtension)
+                            if target != games[index].url, (try? Library.existing(for: target, settings: settings)) != nil { throw ArtError.message("Renaming skipped because the new name already has artwork.") }
+                            try Task.checkCancellation()
+                            let renamed = try FilenameNormalization.rename(games[index].url, to: canonical)
+                            games[index].url = renamed; games[index].title = Game.clean(canonical)
+                            games[index].lookupName = canonical
+                            if selectedIDs.remove(oldID) != nil { selectedIDs.insert(renamed.path) }
+                            if selection == oldID { selection = renamed.path }
+                            if selectionAnchor == oldID { selectionAnchor = renamed.path }
+                            if batchIDs?.remove(oldID) != nil { batchIDs?.insert(renamed.path) }
+                        }
                         try Task.checkCancellation()
                         games[index].artwork = data; games[index].source = source; games[index].status = "Ready"
                     } else { games[index].status = "Not found"; games[index].source = "Try importing an image." }
@@ -108,7 +144,7 @@ import BoxArtCore
             }
             message = Task.isCancelled ? "Stopped. Downloaded artwork is ready to save." : "Search complete. \(ready) covers ready to save."
             busy = false
-            if saveAfter && !Task.isCancelled { save(ids: ids) }
+            if saveAfter && !Task.isCancelled { save(ids: batchIDs) }
         }
     }
     func downloadAndSaveAll() { downloadAndSave(ids: nil) }
@@ -169,8 +205,9 @@ import BoxArtCore
             } catch { self.error = error.localizedDescription }
         }
     }
-    func importImage() {
-        guard let index = games.firstIndex(where: { $0.id == selection }), games[index].savedURL == nil else { return }
+    func importImage(for id: String? = nil) {
+        guard !busy else { return }
+        guard let index = games.firstIndex(where: { $0.id == (id ?? selection) }), games[index].savedURL == nil else { return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .tiff, .webP]; panel.canChooseDirectories = false
         if panel.runModal() == .OK, let url = panel.url {
             do { let data = try Data(contentsOf: url); _ = try Library.render(data, settings: settings); games[index].artwork = data; games[index].source = "Imported · \(url.lastPathComponent)"; games[index].status = "Ready" }
@@ -279,6 +316,9 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Artwork settings").font(.title2.bold())
             Form {
+                Toggle("Normalize filenames when processing", isOn: $model.normalizeFilenames).disabled(model.busy)
+                Text("Renames ROMs to uniquely matched artwork titles, keeping their extensions. Off by default. Skips ambiguous matches, existing artwork and playlist-based libraries. Saves a rename log beside the ROMs.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Picker("Export profile", selection: $model.profile) { ForEach(Profile.allCases) { Text($0.rawValue).tag($0) } }
                 Text(model.profile.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if model.profile != .twilight {
@@ -315,9 +355,13 @@ struct ContentView: View {
                 Button("Download & save all") { model.downloadAndSaveAll() }.buttonStyle(.borderedProminent).tint(.teal).disabled(model.busy || model.games.isEmpty).help("Find and save all missing covers across the entire scanned library")
             }
             HStack {
-                Picker("Artwork", selection: $model.filter) {
-                    ForEach(["All games", "Needs artwork", "Ready to save", "Saved"], id: \.self) { Text($0).tag($0) }
-                }.pickerStyle(.segmented).frame(maxWidth: 430)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(["All games", "Needs artwork", "Ready to save", "Saved"], id: \.self) { item in
+                            artworkFilter(item)
+                        }
+                    }.padding(3)
+                }.fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 if !model.selectedIDs.isEmpty {
                     Button("Get for selected (\(model.selectedIDs.count))") { model.getForSelected() }
@@ -328,7 +372,40 @@ struct ContentView: View {
                     Button("Save \(model.ready) ready covers") { model.save() }.disabled(model.ready == 0)
                 } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 30).disabled(model.busy)
             }
+            if model.filter == "Ready to save" {
+                HStack(spacing: 10) {
+                    Image(systemName: "tray.and.arrow.down").foregroundStyle(.teal)
+                    Text("Covers in memory, not yet saved to your artwork folder.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Save these covers") { model.save(ids: Set(model.visible.map(\.id))) }
+                        .disabled(model.busy || model.visible.isEmpty)
+                }
+            }
         }.padding(24)
+    }
+    private func artworkFilter(_ item: String) -> some View {
+        let selected = model.filter == item
+        let title = item == "Ready to save" ? "Unsaved" : item == "All games" ? "All" : item == "Needs artwork" ? "Missing" : item
+        let count = model.filterCount(item)
+        return Button { model.filter = item } label: {
+            HStack(spacing: 7) {
+                Image(systemName: icon(item)).font(.system(size: 12, weight: .medium))
+                Text(title).font(.system(size: 13, weight: selected ? .semibold : .medium))
+                Text(count.formatted()).font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(selected ? Color.teal.opacity(0.16) : Color.primary.opacity(0.06), in: Capsule())
+            }
+            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .padding(.horizontal, 11).padding(.vertical, 8)
+            .background(selected ? Color.teal.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? Color.teal.opacity(0.45) : Color.clear))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(count) games")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .help(item == "Ready to save" ? "Downloaded or imported covers that have not been saved. Unsaved previews are lost when the app closes." : "Show \(item.lowercased()) in the current system and search")
     }
     private var library: some View {
         Group {
@@ -353,6 +430,7 @@ struct ContentView: View {
                                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.selectedIDs.contains(game.id) ? Color.teal.opacity(0.5) : .clear))
                             }.buttonStyle(.plain)
                                 .accessibilityAddTraits(model.selectedIDs.contains(game.id) ? .isSelected : [])
+                                .contextMenu { coverMenu(game) }
                         }
                     }.padding(22)
                 }
@@ -365,10 +443,38 @@ struct ContentView: View {
                             Spacer()
                             Text(game.status).font(.caption.weight(.medium)).foregroundStyle(game.status == "Saved" ? .green : game.status == "Ready" ? .teal : .secondary)
                         }.padding(.vertical, 5).tag(game.id)
+                            .contextMenu { coverMenu(game) }
                     }
                 }.listStyle(.inset)
             }
         }
+    }
+    @ViewBuilder private func coverMenu(_ game: Game) -> some View {
+        Button("Show in Finder", systemImage: "folder") {
+            NSWorkspace.shared.activateFileViewerSelecting([game.savedURL ?? game.url])
+        }
+        if game.savedURL != nil {
+            Button("Show ROM in Finder", systemImage: "doc") {
+                NSWorkspace.shared.activateFileViewerSelecting([game.url])
+            }
+        }
+        Button("Show Info", systemImage: "info.circle") {
+            model.select(game.id)
+            showInspector = true
+        }
+        Divider()
+        Button("Find Image", systemImage: "magnifyingglass") {
+            model.download(ids: [game.id])
+        }.disabled(model.busy || game.savedURL != nil || game.status == "Ready")
+        Button("Search Images Online…", systemImage: "globe") {
+            var components = URLComponents(string: "https://www.google.com/search")!
+            components.queryItems = [URLQueryItem(name: "tbm", value: "isch"), URLQueryItem(name: "q", value: "\(game.title) \(game.system.rawValue) box art")]
+            if let url = components.url { NSWorkspace.shared.open(url) }
+        }
+        Button("Import Image…", systemImage: "photo") { model.importImage(for: game.id) }
+            .disabled(model.busy || game.savedURL != nil)
+        Button("Save Image", systemImage: "square.and.arrow.down") { model.save(ids: [game.id]) }
+            .disabled(model.busy || game.status != "Ready")
     }
     private var inspector: some View {
         ScrollView {

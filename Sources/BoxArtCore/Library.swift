@@ -65,12 +65,12 @@ public struct ExportSettings {
     }
 }
 public struct Game: Identifiable {
-    public let url: URL
+    public var url: URL
     public var id: String { url.path }
     public var system: GameSystem { GameSystem.infer(url) ?? .nds }
     public var lookupName: String?
     public let code: String?
-    public let title: String
+    public var title: String
     public var artwork: Data?
     public var source: String = ""
     public var status: String = "Missing"
@@ -161,6 +161,22 @@ public actor ArtworkService {
         guard response.statusCode == 200 else { throw ArtError.message("Artwork server returned HTTP \(response.statusCode). Try again later.") }
         guard data.count < 20_000_000, CGImageSourceCreateWithData(data as CFData, nil) != nil else { return nil }
         return data
+    }
+    private var nameCache: [String: [String]] = [:]
+    public func normalizedName(for game: Game) async throws -> String? {
+        let repo = game.system.repository
+        if nameCache[repo] == nil {
+            struct Tree: Decodable { struct Entry: Decodable { let path: String; let type: String }; let tree: [Entry]; let truncated: Bool? }
+            let url = URL(string: "https://api.github.com/repos/libretro-thumbnails/\(repo)/git/trees/master?recursive=1")!
+            let (data, response) = try await session.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ArtError.message("Artwork name index unavailable. Try again later.") }
+            let tree = try JSONDecoder().decode(Tree.self, from: data)
+            guard tree.truncated != true else { throw ArtError.message("Artwork name index is incomplete; no automatic rename was made.") }
+            nameCache[repo] = tree.tree.filter { $0.type == "blob" && $0.path.hasPrefix("Named_Boxarts/") && $0.path.hasSuffix(".png") }.map { String($0.path.dropFirst(14).dropLast(4)) }
+        }
+        let original = game.url.deletingPathExtension().lastPathComponent
+        if nameCache[repo]!.contains(original) { return original }
+        return FilenameNormalization.match(original, names: nameCache[repo]!)
     }
     public func artwork(for game: Game) async throws -> (Data, String)? {
         var lastError: Error?
