@@ -2,6 +2,8 @@
 
 A native SwiftUI app for finding and exporting multi-system cover art. macOS 14+, no third-party dependencies or API keys. The supplied build runs on Apple Silicon.
 
+![BoxArt for macOS showing a Nintendo DS cover grid, system sidebar, and artwork filters](docs/images/boxart-library.png)
+
 ## Run
 
 Download the Apple Silicon app from [GitHub Releases](https://github.com/abradburne/boxart/releases), open the DMG, and drag BoxArt into Applications. For a local build, open `build/BoxArt.app`. It initially scans `/Volumes/DS/Roms/NDS` (read-only). Use **Download & save all** to fetch and export missing covers across the scanned library in one run. The toolbar’s More menu also offers downloads for preview only and saving ready covers separately. Use **Choose folder** for another library. The sidebar navigates systems; the toolbar switches grid/list and opens artwork settings. Click a cover, then Shift-click another to select a range; Command-click adds or removes individual games. **Get for selected** downloads and saves only that selection. List view supports native multi-selection too. Right-click a cover or list row for Show in Finder, Show Info, Find Image, Search Images Online, Import Image, and Save Image. Actions apply to the clicked game; saved artwork remains protected, so finding/importing is available only for games without saved covers. Changing search, system or status filters removes hidden games from the selection; an in-progress batch keeps its original selection. ROM contents are never modified. With filename normalization off (the default), ROM filenames remain unchanged; existing PNG/JPEG covers are preserved. Local builds are ad-hoc signed by default. Official release signing uses XenoCode Developer ID and Apple notarization.
