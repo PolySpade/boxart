@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boxart"
+version = "0.1.1"
+description = "Find and export multi-system cover art for handheld ROM libraries"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["PySide6>=6.5", "Pillow>=10"]
+
+[project.scripts]
+boxart = "boxart.app:main"
+
+[tool.setuptools]
+packages = ["boxart"]
+
+[tool.setuptools.package-data]
+boxart = ["data/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]

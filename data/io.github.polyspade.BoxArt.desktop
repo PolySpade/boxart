@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=BoxArt
+GenericName=Cover Art Downloader
+Comment=Find and export box art for handheld ROM libraries
+Exec=boxart
+Icon=io.github.polyspade.BoxArt
+Terminal=false
+Categories=Game;Utility;Qt;
+Keywords=roms;cover;boxart;thumbnails;retroarch;emulator;
