@@ -1,6 +1,7 @@
 """The Qt user interface."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -883,13 +884,21 @@ class MainWindow(QMainWindow):
         self.count_label.setText(f"{model.saved} / {len(model.games)} saved")
 
 
+def desktop_entry_installed() -> bool:
+    """Whether the .desktop file is installed; the portal rejects unknown app IDs."""
+    data_home = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local/share")
+    data_dirs = (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
+    return any(Path(d, "applications", f"{APP_ID}.desktop").is_file() for d in [data_home, *data_dirs] if d)
+
+
 def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv if argv is None else argv)
     app.setApplicationName("BoxArt")
     app.setApplicationDisplayName("BoxArt")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("BoxArt")
-    app.setDesktopFileName(APP_ID)
+    if desktop_entry_installed():
+        app.setDesktopFileName(APP_ID)
     app.setWindowIcon(QIcon.fromTheme(APP_ID, QIcon(str(ICON_PATH))))
     window = MainWindow(LibraryModel())
     window.show()
