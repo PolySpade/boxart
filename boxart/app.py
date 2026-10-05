@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .dialogs import choose_directory, choose_files, configure_platform_theme
 from .library import Game, Profile
-from .model import FILTERS, LibraryModel
+from .model import FILTERS, WORKER_CHOICES, LibraryModel
 from .systems import GameSystem
 
 APP_ID = "io.github.polyspade.BoxArt"
@@ -241,6 +241,13 @@ class SettingsDialog(QDialog):
         self.normalize.toggled.connect(self.model.set_normalize_filenames)
         form.addRow(self.normalize)
         form.addRow(self.caption("Renames ROMs to uniquely matched artwork titles, keeping their extensions. Off by default. Skips ambiguous matches, existing artwork and playlist-based libraries. Saves a rename log beside the ROMs."))
+        self.workers = QComboBox()
+        for count in WORKER_CHOICES:
+            self.workers.addItem("1 (one at a time)" if count == 1 else str(count), count)
+        self.workers.setCurrentIndex(max(0, self.workers.findData(self.model.workers)))
+        self.workers.currentIndexChanged.connect(lambda: self.model.set_workers(self.workers.currentData()))
+        self.workers.setToolTip("How many games to look up and download at the same time. Lower this if downloads fail or your connection is slow.")
+        form.addRow("Parallel downloads", self.workers)
         self.profile = QComboBox()
         for profile in Profile:
             self.profile.addItem(profile.value, profile)

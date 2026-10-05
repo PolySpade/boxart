@@ -4,6 +4,7 @@ from __future__ import annotations
 import getpass
 import glob
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, Signal
@@ -15,6 +16,8 @@ from .library import ExportSettings, Game, Profile
 from .systems import GameSystem, match_playlist
 
 FILTERS = ["All games", "Needs artwork", "Ready to save", "Saved"]
+WORKER_CHOICES = [1, 2, 4, 6, 8, 12, 16]
+DEFAULT_WORKERS = 6
 
 
 def default_folder() -> str:
@@ -35,6 +38,10 @@ class LibraryModel(QObject):
         self.store = store if store is not None else QSettings("BoxArt", "BoxArt")
         self.folder = str(self.store.value("romFolder", "") or default_folder())
         self.normalize_filenames = self.store.value("normalizeFilenames", False) in (True, "true")
+        try:
+            self.workers = max(1, min(16, int(self.store.value("downloadWorkers", DEFAULT_WORKERS))))
+        except (TypeError, ValueError):
+            self.workers = DEFAULT_WORKERS
         self.games: list[Game] = []
         self.selection: str | None = None
         self.selected_ids: set[str] = set()
@@ -54,6 +61,7 @@ class LibraryModel(QObject):
         self.service = service or ArtworkService()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
+        self._state_lock = threading.Lock()
 
     # Selection
 
@@ -147,6 +155,10 @@ class LibraryModel(QObject):
     def set_normalize_filenames(self, value: bool):
         self.normalize_filenames = value
         self.store.setValue("normalizeFilenames", value)
+
+    def set_workers(self, value: int):
+        self.workers = max(1, min(16, int(value)))
+        self.store.setValue("downloadWorkers", self.workers)
 
     def set_destination(self, path: Path | None):
         self.destination = path
@@ -244,41 +256,59 @@ class LibraryModel(QObject):
             return
         self._start(self._download_job, targets, save_after, None if ids is None else set(ids), self.normalize_filenames)
 
-    def _download_job(self, cancel, targets, save_after, batch_ids, normalize):
-        for offset, game in enumerate(targets):
+    def _lookup(self, game: Game, cancel: threading.Event, normalize: bool):
+        """Network-only half of a download; runs on a pool thread and never touches files."""
+        with self._state_lock:
             if cancel.is_set():
-                break
+                raise Cancelled()
             game.status = "Searching"
-            self._status(f"Finding artwork · {game.title}")
-            self.changed.emit()
-            try:
-                lookup = Game(game.path, game.code, game.title, game.lookup_name)
-                canonical = None
-                if normalize:
-                    if game.id in self.identities or self.profile is Profile.RETROARCH:
-                        raise ArtError("Disable filename normalization for RetroArch or imported playlists; their paths must remain unchanged.")
-                    canonical = self.service.normalized_name(lookup, cancel)
-                    lookup.lookup_name = canonical or lookup.lookup_name
-                result = self.service.artwork(lookup, cancel)
-                if result is not None:
-                    data, source = result
-                    if canonical is not None:
-                        self._rename(game, canonical, batch_ids, cancel)
+        self.changed.emit()
+        lookup = Game(game.path, game.code, game.title, game.lookup_name)
+        canonical = None
+        if normalize:
+            if game.id in self.identities or self.profile is Profile.RETROARCH:
+                raise ArtError("Disable filename normalization for RetroArch or imported playlists; their paths must remain unchanged.")
+            canonical = self.service.normalized_name(lookup, cancel)
+            lookup.lookup_name = canonical or lookup.lookup_name
+        return canonical, self.service.artwork(lookup, cancel)
+
+    def _download_job(self, cancel, targets, save_after, batch_ids, normalize):
+        workers = max(1, min(self.workers, len(targets)))
+        pool = ThreadPoolExecutor(workers, thread_name_prefix="boxart-download")
+        futures = {pool.submit(self._lookup, game, cancel, normalize): game for game in targets}
+        done = 0
+        self._status(f"Finding artwork · 0 of {len(targets)}" + (f" · {workers} at a time" if workers > 1 else ""))
+        try:
+            # Results are applied here, one at a time, so renames and selection updates stay serial.
+            for future in as_completed(futures):
+                game = futures[future]
+                try:
+                    canonical, result = future.result()
                     if cancel.is_set():
                         raise Cancelled()
-                    game.artwork, game.source, game.status = data, source, "Ready"
-                else:
-                    game.status, game.source = "Not found", "Try importing an image."
-            except Cancelled:
-                game.status = "Missing"
-                break
-            except Exception as error:
-                if cancel.is_set():
-                    game.status = "Missing"
+                    if result is not None:
+                        data, source = result
+                        if canonical is not None:
+                            self._rename(game, canonical, batch_ids, cancel)
+                        game.artwork, game.source, game.status = data, source, "Ready"
+                    else:
+                        game.status, game.source = "Not found", "Try importing an image."
+                except Cancelled:
                     break
-                game.status, game.source = "Error", str(error)
-            self._status(progress=(offset + 1) / len(targets))
-            self.changed.emit()
+                except Exception as error:
+                    if cancel.is_set():
+                        break
+                    game.status, game.source = "Error", str(error)
+                done += 1
+                self._status(f"Finding artwork · {done} of {len(targets)} · {game.title}", done / len(targets))
+                self.changed.emit()
+        finally:
+            # Don't wait on in-flight requests after Stop; their results are discarded.
+            pool.shutdown(wait=not cancel.is_set(), cancel_futures=True)
+            with self._state_lock:
+                for game in targets:
+                    if game.status == "Searching":
+                        game.status = "Missing"
         if cancel.is_set():
             self._status("Stopped. Downloaded artwork is ready to save.")
         else:

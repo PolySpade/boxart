@@ -25,6 +25,7 @@ class ArtworkService:
     def __init__(self):
         self._names: dict[str, list[str]] = {}
         self._lock = threading.Lock()
+        self._repo_locks: dict[str, threading.Lock] = {}
 
     def _get(self, url: str, cancel: threading.Event | None) -> tuple[int, bytes]:
         if cancel is not None and cancel.is_set():
@@ -64,17 +65,19 @@ class ArtworkService:
     def normalized_name(self, game: Game, cancel: threading.Event | None = None) -> str | None:
         repo = game.system.repository
         with self._lock:
+            repo_lock = self._repo_locks.setdefault(repo, threading.Lock())
+        # One download of each system's index, however many threads need it at once.
+        with repo_lock:
             names = self._names.get(repo)
-        if names is None:
-            url = f"https://api.github.com/repos/libretro-thumbnails/{repo}/git/trees/master?recursive=1"
-            status, data = self._get(url, cancel)
-            if status != 200:
-                raise ArtError("Artwork name index unavailable. Try again later.")
-            tree = json.loads(data)
-            if tree.get("truncated"):
-                raise ArtError("Artwork name index is incomplete; no automatic rename was made.")
-            names = [e["path"][14:-4] for e in tree["tree"] if e["type"] == "blob" and e["path"].startswith("Named_Boxarts/") and e["path"].endswith(".png")]
-            with self._lock:
+            if names is None:
+                url = f"https://api.github.com/repos/libretro-thumbnails/{repo}/git/trees/master?recursive=1"
+                status, data = self._get(url, cancel)
+                if status != 200:
+                    raise ArtError("Artwork name index unavailable. Try again later.")
+                tree = json.loads(data)
+                if tree.get("truncated"):
+                    raise ArtError("Artwork name index is incomplete; no automatic rename was made.")
+                names = [e["path"][14:-4] for e in tree["tree"] if e["type"] == "blob" and e["path"].startswith("Named_Boxarts/") and e["path"].endswith(".png")]
                 self._names[repo] = names
         original = game.path.stem
         if original in names:
