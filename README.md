@@ -41,6 +41,10 @@ For **RetroArch**, choose the directory configured as **Settings → Directory �
 
 Other frontend layouts can use Anbernic `Imgs` or Custom folder export. Emulator-specific databases and gamelist.xml are not generated, and universal compatibility is not claimed.
 
+## Local artwork library
+
+Every cover BoxArt downloads, and every image you import, is also kept at full, original quality in `~/.local/share/boxart/artwork` (or `$XDG_DATA_HOME/boxart/artwork`). It is organised as `<system>/<name>.<ext>`, plus `<system>/by-code/<GAMECODE>.<ext>` for DS games. When you scan another device, each game is looked up there first, so covers you already have are reused instantly, without going online, and re-rendered for that device’s profile and size. Matching is exact: the DS header game code (so differently named copies of the same ROM still match), the playlist label or normalized artwork name, or the ROM filename. Downloads never replace a stored cover; importing an image does, so a manual fix carries over to every device. Turn it off or open the folder from Settings. Existing covers already on a card are not copied into the library.
+
 ## Matching
 
 Reads only the four-byte game code at offset 0x0C from `.nds` and `.dsi` headers. Tries the appropriate Libretro system’s box art with exact filename matching and Libretro character substitutions first. Falls back to GameTDB medium front covers using the exact DS game code, trying the ROM region first, then small covers. No fuzzy matching that might confuse sequels. Translations keep their underlying game code. Homebrew and unrecognized titles can use **Import image**. Non-DS and archived games use Libretro filename/playlist-label matching.

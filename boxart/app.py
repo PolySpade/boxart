@@ -282,6 +282,20 @@ class SettingsDialog(QDialog):
         form.addRow(self.playlists)
         self.playlist_count = self.caption("")
         form.addRow(self.playlist_count)
+        self.use_library = QCheckBox("Keep covers in a local artwork library")
+        self.use_library.setChecked(self.model.use_library)
+        self.use_library.toggled.connect(self.model.set_use_library)
+        form.addRow(self.use_library)
+        form.addRow(self.caption("Downloaded and imported covers are kept at full quality on this computer and reused, without going online, "
+                                 "when you scan another device. Matched by DS game code or exact artwork/ROM name."))
+        library_row = QHBoxLayout()
+        self.library_info = self.caption("")
+        self.library_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        library_row.addWidget(self.library_info, 1)
+        open_library = QPushButton("Open folder")
+        open_library.clicked.connect(self.open_library)
+        library_row.addWidget(open_library)
+        form.addRow(library_row)
         layout.addWidget(self.form)
 
         line = QFrame()
@@ -326,6 +340,8 @@ class SettingsDialog(QDialog):
             widget.setVisible(profile is Profile.RETROARCH)
         self.playlists.setEnabled(bool(self.model.games))
         self.playlist_count.setText(f"{len(self.model.identities)} playlist labels matched")
+        count, size = self.model.artwork_library.stats()
+        self.library_info.setText(f"{self.model.artwork_library.root}\n{count:,} covers · {size / 1_000_000:.1f} MB")
         self.adjustSize()
 
     def profile_changed(self):
@@ -340,6 +356,11 @@ class SettingsDialog(QDialog):
     def format_changed(self):
         self.model.jpeg = self.format.currentIndex() == 1
         self.model.refresh_existing()
+
+    def open_library(self):
+        root = self.model.artwork_library.root
+        root.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
 
     def choose_destination(self):
         start = str(self.model.settings.destination or self.model.folder)

@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QSettings, Signal
 
 from . import library, normalization
 from .artwork import ArtworkService, Cancelled
+from .cache import ArtworkLibrary
 from .errors import ArtError
 from .library import ExportSettings, Game, Profile
 from .systems import GameSystem, match_playlist
@@ -33,7 +34,7 @@ class LibraryModel(QObject):
     status_changed = Signal()
     error_raised = Signal(str)
 
-    def __init__(self, store: QSettings | None = None, service: ArtworkService | None = None):
+    def __init__(self, store: QSettings | None = None, service: ArtworkService | None = None, artwork_library: ArtworkLibrary | None = None):
         super().__init__()
         self.store = store if store is not None else QSettings("BoxArt", "BoxArt")
         self.folder = str(self.store.value("romFolder", "") or default_folder())
@@ -62,6 +63,8 @@ class LibraryModel(QObject):
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         self._state_lock = threading.Lock()
+        self.artwork_library = artwork_library or ArtworkLibrary()
+        self.use_library = self.store.value("useArtworkLibrary", True) in (True, "true")
 
     # Selection
 
@@ -159,6 +162,17 @@ class LibraryModel(QObject):
     def set_workers(self, value: int):
         self.workers = max(1, min(16, int(value)))
         self.store.setValue("downloadWorkers", self.workers)
+
+    def set_use_library(self, value: bool):
+        self.use_library = value
+        self.store.setValue("useArtworkLibrary", value)
+
+    def _remember(self, game: Game, data: bytes, names, replace: bool = False):
+        # The library is a convenience; never let it fail a download or import.
+        try:
+            self.artwork_library.put(game, data, names, replace=replace)
+        except OSError:
+            pass
 
     def set_destination(self, path: Path | None):
         self.destination = path
@@ -270,7 +284,9 @@ class LibraryModel(QObject):
                 raise ArtError("Disable filename normalization for RetroArch or imported playlists; their paths must remain unchanged.")
             canonical = self.service.normalized_name(lookup, cancel)
             lookup.lookup_name = canonical or lookup.lookup_name
-        return canonical, self.service.artwork(lookup, cancel)
+        if self.use_library and (data := self.artwork_library.get(lookup)) is not None:
+            return canonical, (data, "Local artwork library"), True
+        return canonical, self.service.artwork(lookup, cancel), False
 
     def _download_job(self, cancel, targets, save_after, batch_ids, normalize):
         workers = max(1, min(self.workers, len(targets)))
@@ -283,13 +299,16 @@ class LibraryModel(QObject):
             for future in as_completed(futures):
                 game = futures[future]
                 try:
-                    canonical, result = future.result()
+                    canonical, result, cached = future.result()
                     if cancel.is_set():
                         raise Cancelled()
                     if result is not None:
                         data, source = result
+                        original_stem = game.path.stem
                         if canonical is not None:
                             self._rename(game, canonical, batch_ids, cancel)
+                        if self.use_library and not cached:
+                            self._remember(game, data, [game.lookup_name, original_stem, game.path.stem])
                         game.artwork, game.source, game.status = data, source, "Ready"
                     else:
                         game.status, game.source = "Not found", "Try importing an image."
@@ -434,4 +453,6 @@ class LibraryModel(QObject):
             self._fail(str(error))
             return
         game.artwork, game.source, game.status = data, f"Imported · {Path(path).name}", "Ready"
+        if self.use_library:
+            self._remember(game, data, [game.lookup_name, game.path.stem], replace=True)
         self.changed.emit()

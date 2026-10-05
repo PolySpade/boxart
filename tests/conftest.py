@@ -1,10 +1,13 @@
 import io
 import os
+import tempfile
 
 import pytest
 from PIL import Image
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Keep tests away from the user's real artwork library.
+os.environ["XDG_DATA_HOME"] = tempfile.mkdtemp(prefix="boxart-tests-")
 
 live = pytest.mark.skipif(os.environ.get("BOXART_LIVE_TEST") != "1", reason="Opt-in network test")
 
