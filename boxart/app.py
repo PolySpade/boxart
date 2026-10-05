@@ -9,13 +9,14 @@ from PySide6.QtCore import QAbstractListModel, QModelIndex, QRect, QSize, Qt, QT
 from PySide6.QtDBus import QDBusConnection, QDBusInterface
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolBar, QToolButton,
     QVBoxLayout, QWidget,
 )
 
 from . import __version__
+from .dialogs import choose_directory, choose_files, configure_platform_theme
 from .library import Game, Profile
 from .model import FILTERS, LibraryModel
 from .systems import GameSystem
@@ -335,15 +336,15 @@ class SettingsDialog(QDialog):
 
     def choose_destination(self):
         start = str(self.model.settings.destination or self.model.folder)
-        folder = QFileDialog.getExistingDirectory(self, "Choose the artwork destination (SD root for TWiLight Menu++)", start)
+        folder = choose_directory(self, "Choose the artwork destination (SD root for TWiLight Menu++)", start)
         if folder:
-            self.model.set_destination(Path(folder))
+            self.model.set_destination(folder)
             self.update_state()
 
     def import_playlists(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Choose RetroArch JSON .lpl playlists", self.model.folder, "RetroArch playlists (*.lpl);;All files (*)")
+        files = choose_files(self, "Choose RetroArch JSON .lpl playlists", self.model.folder, "RetroArch playlists (*.lpl);;All files (*)", multiple=True)
         if files:
-            self.model.import_playlists([Path(f) for f in files])
+            self.model.import_playlists(files)
             self.update_state()
 
 
@@ -762,9 +763,9 @@ class MainWindow(QMainWindow):
     def choose_folder(self):
         if self.model.busy:
             return
-        folder = QFileDialog.getExistingDirectory(self, "Choose your Roms folder or an individual system folder", self.model.folder)
+        folder = choose_directory(self, "Choose your Roms folder or an individual system folder", self.model.folder)
         if folder:
-            self.model.set_folder(folder)
+            self.model.set_folder(str(folder))
 
     def open_settings(self):
         if self.settings_dialog is None:
@@ -774,9 +775,9 @@ class MainWindow(QMainWindow):
         self.settings_dialog.raise_()
 
     def import_image(self, id: str | None):
-        files, _ = QFileDialog.getOpenFileName(self, "Import cover image", str(Path.home()), "Images (*.png *.jpg *.jpeg *.tif *.tiff *.webp *.bmp *.gif)")
+        files = choose_files(self, "Import cover image", Path.home() / "Pictures", "Images (*.png *.jpg *.jpeg *.tif *.tiff *.webp *.bmp *.gif)")
         if files:
-            self.model.import_image(Path(files), id)
+            self.model.import_image(files[0], id)
 
     def context_menu(self, position):
         index = self.view.indexAt(position)
@@ -892,6 +893,7 @@ def desktop_entry_installed() -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_platform_theme()
     app = QApplication(sys.argv if argv is None else argv)
     app.setApplicationName("BoxArt")
     app.setApplicationDisplayName("BoxArt")
